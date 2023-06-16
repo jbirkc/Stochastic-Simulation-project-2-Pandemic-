@@ -121,7 +121,7 @@ def get_infection_probability(place: Place):
         if human.infected:
             no_infected += 1
 
-    return min((no_infected / len(place))*0.3, 1)
+    return min(no_infected / len(place), 1)
 
 
 def check_death(person: Human, place: Place):
@@ -201,8 +201,8 @@ def simulate(n_time_steps, n_families, n_workplaces=2, n_supermarkets=1):
             if human.dead:
                 continue
             current_loc = get_current_location(human)
+            human.time_since_infected += 1
             if human.infected:
-                human.time_since_infected += 1
                 u = np.random.random()
                 if u < human.probability_of_cured:
                     human.infected = False
@@ -210,19 +210,15 @@ def simulate(n_time_steps, n_families, n_workplaces=2, n_supermarkets=1):
                     human.susceptible = False
                     human.time_since_infected = 0
                 else:
-                    human.time_since_infected += 1
                     human_id = check_death(human, current_loc)
                     continue
             else:
                 if human.susceptible:
                     infect_p = get_infection_probability(current_loc)
                     u = np.random.random()
+                    if u < infect_p:
+                        infect_person(human)
                 else:
-                    u=0
-                if u < infect_p:
-                    infect_person(human)
-                else:
-                    human.time_since_infected += 1
                     if human.time_since_infected > config.time_to_susceptible:
                         human.susceptible = True
 

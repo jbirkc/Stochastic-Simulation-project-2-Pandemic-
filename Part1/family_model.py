@@ -5,7 +5,7 @@ from typing import List, Dict
 import pandas as pd
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-from Part1.family_model_config import FamilyModelConfig
+from family_model_config import FamilyModelConfig
 
 
 config = FamilyModelConfig()
@@ -65,9 +65,9 @@ class Town:
 
 
 def get_prob_matrix():
-    q = np.array([[0.3, 0.5, 0.2],
-                  [0.5, 0.3, 0.2],
-                  [0.2, 0.2, 0.6]])
+    q = np.array([[0.4, 0.5, 0.1],
+                  [0.5, 0.4, 0.1],
+                  [0.9, 0.05, 0.05]])
 
     return q
 
@@ -121,7 +121,7 @@ def get_infection_probability(place: Place):
         if human.infected:
             no_infected += 1
 
-    return min(no_infected / len(place), 1)
+    return min((no_infected / len(place))*0.3, 1)
 
 
 def check_death(person: Human, place: Place):
@@ -214,8 +214,11 @@ def simulate(n_time_steps, n_families, n_workplaces=2, n_supermarkets=1):
                     human_id = check_death(human, current_loc)
                     continue
             else:
-                infect_p = get_infection_probability(current_loc)
-                u = np.random.random()
+                if human.susceptible:
+                    infect_p = get_infection_probability(current_loc)
+                    u = np.random.random()
+                else:
+                    u=0
                 if u < infect_p:
                     infect_person(human)
                 else:
@@ -250,11 +253,16 @@ if __name__ == "__main__":
     mean_stats = stat_tensor.mean(axis=0)
     std_stats = stat_tensor.std(axis=0)
 
-    plt.plot(mean_stats[:, 1], label="Dead")
-    plt.plot(mean_stats[:, 2], label="Infected")
-    plt.plot(mean_stats[:, 3], label="Recovered")
-    plt.plot(mean_stats[:, 4], label="Susceptible")
-    plt.plot(mean_stats[:, 5], label="Not Infected")
+    plt.plot(mean_stats[:, 1], linestyle="dashed", label="Dead")
+    plt.fill_between([i for i in range(len(mean_stats[:, 1]))],(mean_stats[:, 1]-1.96*std_stats[:,1]), (mean_stats[:, 1]+1.96*std_stats[:,1]), alpha=.1)
+    plt.plot(mean_stats[:, 2], linestyle="dashed", label="Infected")
+    plt.fill_between([i for i in range(len(mean_stats[:, 2]))],(mean_stats[:, 2]-1.96*std_stats[:,2]), (mean_stats[:, 2]+1.96*std_stats[:,2]), alpha=.1)
+    plt.plot(mean_stats[:, 3], linestyle="dashed", label="Recovered")
+    plt.fill_between([i for i in range(len(mean_stats[:, 3]))],(mean_stats[:, 3]-1.96*std_stats[:,3]), (mean_stats[:, 3]+1.96*std_stats[:,3]), alpha=.1)
+    plt.plot(mean_stats[:, 4], linestyle="dashed", label="Susceptible")
+    plt.fill_between([i for i in range(len(mean_stats[:, 4]))],(mean_stats[:, 4]-1.96*std_stats[:,4]), (mean_stats[:, 4]+1.96*std_stats[:,4]), alpha=.1)
+    plt.plot(mean_stats[:, 5], linestyle="dashed", label="Not Infected")
+    plt.fill_between([i for i in range(len(mean_stats[:, 5]))],(mean_stats[:, 5]-1.96*std_stats[:,5]), (mean_stats[:, 5]+1.96*std_stats[:,5]), alpha=.1)
     plt.xlabel("Time")
     plt.ylabel("Number of people")
     plt.legend()

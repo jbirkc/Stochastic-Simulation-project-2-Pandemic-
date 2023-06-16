@@ -18,7 +18,6 @@ class Human:
     recovered: bool
     susceptible: bool
     dead: bool
-    has_been_infected: bool
     time_since_infected: int
     child: bool
     home_idx: int
@@ -65,9 +64,9 @@ class Town:
 
 
 def get_prob_matrix():
-    q = np.array([[0.3, 0.5, 0.2],
-                  [0.5, 0.3, 0.2],
-                  [0.2, 0.2, 0.6]])
+    q = np.array([[0.5, 0.3, 0.2],
+                  [0.4, 0.4, 0.2],
+                  [0.85, 0.1, 0.05]])
 
     return q
 
@@ -93,7 +92,6 @@ def setup_town(n_families, n_workplaces=2, n_supermarkets=1):
                 home_idx=family,
                 work_idx=0 if is_child else np.random.choice(len(workplaces)),
                 currently_at=homes,
-                has_been_infected=False,
             )
 
             homes[family].people[person.id] = person
@@ -108,11 +106,10 @@ def setup_town(n_families, n_workplaces=2, n_supermarkets=1):
     return town
 
 
-def infect_person(person: Human):
+def _infect_person(person: Human):
     person.infected = True
     person.susceptible = False
     person.time_since_infected = 0
-    person.has_been_infected = True
 
 
 def get_infection_probability(place: Place):
@@ -124,7 +121,7 @@ def get_infection_probability(place: Place):
     return min(no_infected / len(place), 1)
 
 
-def check_death(person: Human, place: Place):
+def kill_human_with_probability(person: Human, place: Place):
     if person.infected:
         u = np.random.random()
         if u < person.probability_of_death:
@@ -133,8 +130,33 @@ def check_death(person: Human, place: Place):
             person.infected = False
             person.susceptible = False
             person.recovered = False
-            return person.id
-    return None
+
+            return True
+    return False
+
+
+def cure_human_with_probability(person: Human):
+    u = np.random.random()
+    if u < person.probability_of_cured:
+        person.recovered = True
+        person.infected = False
+        person.susceptible = False
+        person.time_since_cured = 0
+
+
+def check_susceptible(person: Human):
+    if (not person.susceptible) & (not person.infected):
+        if person.time_since_infected > config.time_to_susceptible:
+            person.susceptible = True
+            person.time_since_infected = 0
+
+
+def infect_person_with_probability(person: Human, current_loc: Place):
+    if person.susceptible:
+        infect_p = get_infection_probability(current_loc)
+        u = np.random.random()
+        if u < infect_p:
+            _infect_person(person)
 
 
 def get_transistion_probability(person: Human, q:np.ndarray):
@@ -172,7 +194,6 @@ def get_summary_stats_from_town(town: Town):
     no_infected = [person.infected for person in town.people].count(True)
     no_recovered = [person.recovered for person in town.people].count(True)
     no_susceptible = [person.susceptible for person in town.people].count(True)
-    no_not_infected = [person.infected for person in town.people].count(False) - no_dead
     total_no = len(town.people)
 
     stats = {
@@ -181,9 +202,7 @@ def get_summary_stats_from_town(town: Town):
         "no_infected": no_infected,
         "no_recovered": no_recovered,
         "no_susceptible": no_susceptible,
-        "no_not_infected": no_not_infected
     }
-
     return stats
 
 
@@ -191,47 +210,35 @@ def simulate(n_time_steps, n_families, n_workplaces=2, n_supermarkets=1):
     time = n_time_steps
     town = setup_town(n_families, n_workplaces, n_supermarkets)
     q = get_prob_matrix()
-
-    stats = {}
+    summary_statistics = {}
 
     for t in range(time):
-        stats[t] = get_summary_stats_from_town(town)
-
+        summary_statistics[t] = get_summary_stats_from_town(town)
         for human in town.people:
             if human.dead:
                 continue
             current_loc = get_current_location(human)
+            human.time_since_infected += 1
             if human.infected:
-                human.time_since_infected += 1
-                u = np.random.random()
-                if u < human.probability_of_cured:
-                    human.infected = False
-                    human.recovered = True
-                    human.susceptible = False
-                    human.time_since_infected = 0
-                else:
-                    human.time_since_infected += 1
-                    human_id = check_death(human, current_loc)
+                cure_human_with_probability(human)
+                is_dead = kill_human_with_probability(human, current_loc)
+                if is_dead:
                     continue
             else:
-                infect_p = get_infection_probability(current_loc)
-                u = np.random.random()
-                if u < infect_p:
-                    infect_person(human)
-                else:
-                    human.time_since_infected += 1
-                    if human.time_since_infected > config.time_to_susceptible:
-                        human.susceptible = True
+                check_susceptible(human)
+                infect_person_with_probability(human, current_loc)
 
             trans_p = get_transistion_probability(human, q)
+
             go_to_loc = [town.homes, town.workplaces, town.supermarkets]
             go_to_idx = np.random.choice([0, 1, 2], p=trans_p)
             go_to = go_to_loc[go_to_idx]
+
             if not isinstance(human.currently_at[0], type(go_to[0])):
                 move_from_place_to_place(human, go_to)
 
-    stats[t + 1] = get_summary_stats_from_town(town)
-    return pd.DataFrame(stats).T
+    summary_statistics[n_time_steps] = get_summary_stats_from_town(town)
+    return pd.DataFrame(summary_statistics).T
 
 
 if __name__ == "__main__":
@@ -242,7 +249,7 @@ if __name__ == "__main__":
         "n_supermarkets": config.no_supermarkets
     }
 
-    stat_tensor = np.zeros((config.n_simulations, config.time + 1, 6))
+    stat_tensor = np.zeros((config.n_simulations, config.time + 1, 5))
     for i in tqdm(range(config.n_simulations)):
         stats = simulate(**simulations_kwargs).values
         stat_tensor[i] = stats
@@ -250,11 +257,14 @@ if __name__ == "__main__":
     mean_stats = stat_tensor.mean(axis=0)
     std_stats = stat_tensor.std(axis=0)
 
-    plt.plot(mean_stats[:, 1], label="Dead")
-    plt.plot(mean_stats[:, 2], label="Infected")
-    plt.plot(mean_stats[:, 3], label="Recovered")
-    plt.plot(mean_stats[:, 4], label="Susceptible")
-    plt.plot(mean_stats[:, 5], label="Not Infected")
+    plt.plot(mean_stats[:, 1], linestyle="dashed", label="Dead")
+    plt.fill_between([i for i in range(len(mean_stats[:, 1]))],(mean_stats[:, 1]-1.96*std_stats[:,1]), (mean_stats[:, 1]+1.96*std_stats[:,1]), alpha=.1)
+    plt.plot(mean_stats[:, 2], linestyle="dashed", label="Infected")
+    plt.fill_between([i for i in range(len(mean_stats[:, 2]))],(mean_stats[:, 2]-1.96*std_stats[:,2]), (mean_stats[:, 2]+1.96*std_stats[:,2]), alpha=.1)
+    plt.plot(mean_stats[:, 3], linestyle="dashed", label="Recovered")
+    plt.fill_between([i for i in range(len(mean_stats[:, 3]))],(mean_stats[:, 3]-1.96*std_stats[:,3]), (mean_stats[:, 3]+1.96*std_stats[:,3]), alpha=.1)
+    plt.plot(mean_stats[:, 4], linestyle="dashed", label="Susceptible")
+    plt.fill_between([i for i in range(len(mean_stats[:, 4]))],(mean_stats[:, 4]-1.96*std_stats[:,4]), (mean_stats[:, 4]+1.96*std_stats[:,4]), alpha=.1)
     plt.xlabel("Time")
     plt.ylabel("Number of people")
     plt.legend()

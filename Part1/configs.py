@@ -1,11 +1,13 @@
 from pydantic import BaseModel
 from enum import Enum
+from typing import Tuple
 
 
 class LockdownType(Enum):
     NONE = 0
     ISOLATION = 1
-    QUARANTINE = 2
+    FULL_ISOLATION = 2
+    QUARANTINE = 3
 
 
 class ModelType(Enum):
@@ -30,8 +32,8 @@ class FamilyModelConfig(BaseModel):
 
 
 class SpatialConfig(BaseModel):
-    x_lim: tuple[int] = (0, 50)
-    y_lim: tuple[int] = (0, 50)
+    x_lim: Tuple[int] = (0, 50)
+    y_lim: Tuple[int] = (0, 50)
     probability_of_infection: float = 0.5
     infection_distance: float = 4.0
     time: int = 8

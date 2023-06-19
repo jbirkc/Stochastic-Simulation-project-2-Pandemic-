@@ -17,8 +17,8 @@ class ModelType(Enum):
 
 class FamilyModelConfig(BaseModel):
     n_simulations: int = 100
-    no_families: int = 25
-    time: int = 100
+    no_families: int = 100
+    time: int = 200
     no_workplaces: int = 6
     no_supermarkets: int = 1
     probability_of_death: float = 0.005
@@ -30,6 +30,7 @@ class FamilyModelConfig(BaseModel):
     lockdown_type: LockdownType = LockdownType.NONE
     model_type: ModelType = ModelType.PROBABILISTIC
     variable_death_rate: bool = False
+    burn_in_period: int = 20
 
 
 class SpatialConfig(BaseModel):

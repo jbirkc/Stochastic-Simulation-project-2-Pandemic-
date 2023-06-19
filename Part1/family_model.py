@@ -1,15 +1,17 @@
+import warnings
+
 import numpy as np
 import uuid
 from typing import List, Dict
 import pandas as pd
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-from configs import FamilyModelConfig, SpatialConfig, ModelType, LockdownType
-from spatial_model import simulate as simulate_spatial
-from data_structures import Human, Home, Workplace, Supermarket, Town, Place, family_config, spatial_config
+from Part1.configs import FamilyModelConfig, SpatialConfig, ModelType, LockdownType
+from Part1.spatial_model import simulate as simulate_spatial
+from Part1.data_structures import Human, Home, Workplace, Supermarket, Town, Place, family_config, spatial_config
+from itertools import product
 
 family_config, spatial_config = FamilyModelConfig(), SpatialConfig()
-family_config.lockdown_type = LockdownType.ISOLATION
 
 
 def get_prob_matrix() -> np.ndarray:
@@ -69,12 +71,16 @@ def setup_town(n_families, n_workplaces=2, n_supermarkets=1) -> Town:
 def _infect_person(person: Human) -> None:
     person.infected = True
     person.susceptible = False
+    person.times_sick += 1
     person.time_since_infected = 0
 
 
 def get_infection_probability(place: Place) -> float:
     no_infected = 0
     for human in place.people.values():
+        if family_config.lockdown_type == LockdownType.FULL_ISOLATION:
+            if human.quarantined and (human.currently_at == Home):
+                continue
         if human.infected:
             no_infected += 1
 
@@ -84,7 +90,12 @@ def get_infection_probability(place: Place) -> float:
 def kill_human_with_probability(person: Human, place: Place) -> bool:
     if person.infected:
         u = np.random.random()
-        if u < person.probability_of_death:
+
+        prob_of_death = person.probability_of_death
+        if family_config.variable_death_rate:
+            prob_of_death *= person.time_since_infected
+
+        if u < prob_of_death:
             del place.people[person.id]
             person.dead = True
             person.infected = False
@@ -173,6 +184,13 @@ def get_summary_stats_from_town(town: Town) -> Dict[str, int]:
     no_infected = [person.infected for person in town.people].count(True)
     no_recovered = [person.recovered for person in town.people].count(True)
     no_susceptible = [person.susceptible for person in town.people].count(True)
+    average_infection = 0
+    if family_config.model_type == ModelType.SIMULATION:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            average_infection = np.nanmean([
+                person.people_infected / person.times_sick if person.times_sick > 0 else np.nan for person in town.people
+            ])
     total_no = len(town.people)
 
     stats = {
@@ -181,7 +199,9 @@ def get_summary_stats_from_town(town: Town) -> Dict[str, int]:
         "no_infected": no_infected,
         "no_recovered": no_recovered,
         "no_susceptible": no_susceptible,
+        "average_infection": average_infection
     }
+
     return stats
 
 
@@ -237,45 +257,48 @@ def simulate(n_time_steps, n_families, n_workplaces=2, n_supermarkets=1) -> pd.D
 
 
 if __name__ == "__main__":
+    family_config.variable_death_rate = True
+    family_config.model_type = ModelType.SIMULATION
+    family_config.lockdown_type = LockdownType.NONE
 
-    for lockdown in LockdownType:
-        # for model in ModelType:
-        family_config.model_type = ModelType.PROBABILISTIC
-        family_config.lockdown_type = lockdown
+    print(f"Running {family_config.n_simulations} simulations")
+    print(f"with model type {family_config.model_type}")
+    print(f"with lockdown type {family_config.lockdown_type}")
 
-        print(f"Running {family_config.n_simulations} simulations")
-        print(f"with model type {family_config.model_type}")
-        print(f"with lockdown type {family_config.lockdown_type}")
+    simulations_kwargs = {
+        "n_time_steps": family_config.time,
+        "n_families": family_config.no_families,
+        "n_workplaces": family_config.no_workplaces,
+        "n_supermarkets": family_config.no_supermarkets,
+    }
 
-        simulations_kwargs = {
-            "n_time_steps": family_config.time,
-            "n_families": family_config.no_families,
-            "n_workplaces": family_config.no_workplaces,
-            "n_supermarkets": family_config.no_supermarkets,
-        }
+    stat_tensor = np.zeros((family_config.n_simulations, family_config.time + 1, 6))
+    for i in tqdm(range(family_config.n_simulations)):
+        stats = simulate(**simulations_kwargs).values
+        stat_tensor[i] = stats
 
-        stat_tensor = np.zeros((family_config.n_simulations, family_config.time + 1, 5))
-        for i in tqdm(range(family_config.n_simulations)):
-            stats = simulate(**simulations_kwargs).values
-            stat_tensor[i] = stats
+    mean_stats = np.nanmean(stat_tensor, axis=0)
+    std_stats = np.nanstd(stat_tensor, axis=0)
 
-        mean_stats = stat_tensor.mean(axis=0)
-        std_stats = stat_tensor.std(axis=0)
+    plt.plot(mean_stats[:, 1], linestyle="dashed", label="Dead")
+    plt.fill_between([i for i in range(len(mean_stats[:, 1]))], (mean_stats[:, 1] - 1.96 * std_stats[:, 1]),
+                     (mean_stats[:, 1] + 1.96 * std_stats[:, 1]), alpha=.1)
+    plt.plot(mean_stats[:, 2], linestyle="dashed", label="Infected")
+    plt.fill_between([i for i in range(len(mean_stats[:, 2]))], (mean_stats[:, 2] - 1.96 * std_stats[:, 2]),
+                     (mean_stats[:, 2] + 1.96 * std_stats[:, 2]), alpha=.1)
+    plt.plot(mean_stats[:, 3], linestyle="dashed", label="Recovered")
+    plt.fill_between([i for i in range(len(mean_stats[:, 3]))], (mean_stats[:, 3] - 1.96 * std_stats[:, 3]),
+                     (mean_stats[:, 3] + 1.96 * std_stats[:, 3]), alpha=.1)
+    plt.plot(mean_stats[:, 4], linestyle="dashed", label="Susceptible")
+    plt.fill_between([i for i in range(len(mean_stats[:, 4]))], (mean_stats[:, 4] - 1.96 * std_stats[:, 4]),
+                     (mean_stats[:, 4] + 1.96 * std_stats[:, 4]), alpha=.1)
+    plt.xlabel("Time")
+    plt.ylabel("Number of people")
+    plt.title(f"{family_config.model_type}, {family_config.lockdown_type}")
+    plt.legend()
+    plt.show()
 
-        plt.plot(mean_stats[:, 1], linestyle="dashed", label="Dead")
-        plt.fill_between([i for i in range(len(mean_stats[:, 1]))], (mean_stats[:, 1] - 1.96 * std_stats[:, 1]),
-                         (mean_stats[:, 1] + 1.96 * std_stats[:, 1]), alpha=.1)
-        plt.plot(mean_stats[:, 2], linestyle="dashed", label="Infected")
-        plt.fill_between([i for i in range(len(mean_stats[:, 2]))], (mean_stats[:, 2] - 1.96 * std_stats[:, 2]),
-                         (mean_stats[:, 2] + 1.96 * std_stats[:, 2]), alpha=.1)
-        plt.plot(mean_stats[:, 3], linestyle="dashed", label="Recovered")
-        plt.fill_between([i for i in range(len(mean_stats[:, 3]))], (mean_stats[:, 3] - 1.96 * std_stats[:, 3]),
-                         (mean_stats[:, 3] + 1.96 * std_stats[:, 3]), alpha=.1)
-        plt.plot(mean_stats[:, 4], linestyle="dashed", label="Susceptible")
-        plt.fill_between([i for i in range(len(mean_stats[:, 4]))], (mean_stats[:, 4] - 1.96 * std_stats[:, 4]),
-                         (mean_stats[:, 4] + 1.96 * std_stats[:, 4]), alpha=.1)
-        plt.xlabel("Time")
-        plt.ylabel("Number of people")
-        plt.title(f"{family_config.model_type}, {family_config.lockdown_type}")
-        plt.legend()
-        plt.show()
+    plt.plot(mean_stats[:, 5], linestyle="dashed", label="Average infection")
+    # plt.fill_between([i for i in range(len(mean_stats[:, 5]))], (mean_stats[:, 5] - 1.96 * std_stats[:, 1]),
+    #                  (mean_stats[:, 5] + 1.96 * std_stats[:, 1]), alpha=.1)
+    plt.show()

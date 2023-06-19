@@ -3,8 +3,8 @@ import numpy.linalg as l
 import pandas as pd
 import uuid
 from typing import List, Dict
-from data_structures import Human
-from configs import SpatialConfig
+from Part1.data_structures import Human
+from Part1.configs import SpatialConfig
 
 
 def move(person: Human, direction_vector: np.ndarray):
@@ -75,7 +75,9 @@ def simulate(config: SpatialConfig, people: Dict[str, Human]):
                     continue
                 u = np.random.random()
                 if u < config.probability_of_infection:
+                    person.people_infected += 1
                     person2.infected = True
+                    person2.times_sick += 1
                     person2.susceptible = False
                     person2.time_since_infected = 0
 

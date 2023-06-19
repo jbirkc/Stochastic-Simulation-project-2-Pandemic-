@@ -4,7 +4,7 @@ from typing import List, Dict, Type
 import numpy as np
 from pydantic import BaseModel, root_validator
 
-from configs import FamilyModelConfig, SpatialConfig
+from Part1.configs import FamilyModelConfig, SpatialConfig
 
 family_config = FamilyModelConfig()
 spatial_config = SpatialConfig()
@@ -30,6 +30,8 @@ class Human(BaseModel):
     probability_of_cured: float = family_config.probability_of_cured
     time_since_cured: int = 0
     quarantined: bool = False
+    times_sick: int = 0
+    people_infected: int = 0
 
     @root_validator
     def check_location_vector(cls, values):

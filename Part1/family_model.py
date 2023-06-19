@@ -1,69 +1,20 @@
+import warnings
+
 import numpy as np
-from dataclasses import dataclass
 import uuid
 from typing import List, Dict
 import pandas as pd
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-from Part1.family_model_config import FamilyModelConfig
+from Part1.configs import FamilyModelConfig, SpatialConfig, ModelType, LockdownType
+from Part1.spatial_model import simulate as simulate_spatial
+from Part1.data_structures import Human, Home, Workplace, Supermarket, Town, Place, family_config, spatial_config
+from itertools import product
+
+family_config, spatial_config = FamilyModelConfig(), SpatialConfig()
 
 
-config = FamilyModelConfig()
-
-
-@dataclass
-class Human:
-    id: str
-    infected: bool
-    recovered: bool
-    susceptible: bool
-    dead: bool
-    time_since_infected: int
-    child: bool
-    home_idx: int
-    work_idx: int
-    currently_at: List['Place']
-    probability_of_death: float = config.probability_of_death
-    probability_of_cured: float = config.probability_of_cured
-    time_since_cured: int = 0
-
-
-@dataclass
-class Place:
-    id: int
-    people: Dict[str, Human]
-
-    def __getitem__(self, item):
-        return self.people[item]
-
-    def __len__(self):
-        return len(self.people)
-
-
-@dataclass
-class Workplace(Place):
-    pass
-
-
-@dataclass
-class Home(Place):
-    pass
-
-
-@dataclass
-class Supermarket(Place):
-    pass
-
-
-@dataclass
-class Town:
-    homes: List[Home]
-    workplaces: List[Workplace]
-    supermarkets: List[Supermarket]
-    people: List[Human]
-
-
-def get_prob_matrix():
+def get_prob_matrix() -> np.ndarray:
     q = np.array([[0.5, 0.3, 0.2],
                   [0.4, 0.4, 0.2],
                   [0.85, 0.1, 0.05]])
@@ -71,7 +22,16 @@ def get_prob_matrix():
     return q
 
 
-def setup_town(n_families, n_workplaces=2, n_supermarkets=1):
+def get_isolated_prob_matrix() -> np.ndarray:
+    q = np.array([[1, 0, 0],
+                  [1, 0, 0],
+                  [1, 0, 0]])
+
+    return q
+
+
+def setup_town(n_families, n_workplaces=2, n_supermarkets=1) -> Town:
+    Human.update_forward_refs()
     workplaces = [Workplace(i, {}) for i in range(n_workplaces)]
     homes = [Home(i, {}) for i in range(n_families)]
     supermarkets = [Supermarket(i, {}) for i in range(n_supermarkets)]
@@ -80,10 +40,12 @@ def setup_town(n_families, n_workplaces=2, n_supermarkets=1):
         for i in range(family_size):
             u_child = np.random.random()
             u_infected = np.random.random()
-            is_child = u_child < config.probability_of_child
+            is_child = u_child < family_config.probability_of_child
+
             person = Human(
                 id=str(uuid.uuid4()),
-                infected=u_infected < config.probability_of_start_infection,
+                currently_at=Home,
+                infected=u_infected < family_config.probability_of_start_infection,
                 recovered=False,
                 susceptible=True,
                 dead=False,
@@ -91,7 +53,7 @@ def setup_town(n_families, n_workplaces=2, n_supermarkets=1):
                 child=is_child,
                 home_idx=family,
                 work_idx=0 if is_child else np.random.choice(len(workplaces)),
-                currently_at=homes,
+                location_vector=np.random.random(2),
             )
 
             homes[family].people[person.id] = person
@@ -106,36 +68,58 @@ def setup_town(n_families, n_workplaces=2, n_supermarkets=1):
     return town
 
 
-def _infect_person(person: Human):
+def _infect_person(person: Human) -> None:
     person.infected = True
     person.susceptible = False
+    person.times_sick += 1
     person.time_since_infected = 0
 
 
-def get_infection_probability(place: Place):
+def get_infection_probability(place: Place) -> float:
     no_infected = 0
     for human in place.people.values():
+        if family_config.lockdown_type == LockdownType.FULL_ISOLATION:
+            if human.quarantined and (human.currently_at == Home):
+                continue
         if human.infected:
             no_infected += 1
 
     return min(no_infected / len(place), 1)
 
 
-def kill_human_with_probability(person: Human, place: Place):
+def kill_human_with_probability(person: Human, place: Place) -> bool:
     if person.infected:
         u = np.random.random()
-        if u < person.probability_of_death:
+
+        prob_of_death = person.probability_of_death
+        if family_config.variable_death_rate:
+            prob_of_death *= person.time_since_infected
+
+        if u < prob_of_death:
             del place.people[person.id]
             person.dead = True
             person.infected = False
             person.susceptible = False
             person.recovered = False
-
             return True
     return False
 
 
-def cure_human_with_probability(person: Human):
+def lockdown_family(person: Human, town: Town) -> None:
+    family_infected = False
+    for human in town.people:
+        if human.home_idx == person.home_idx:
+            if human.quarantined:
+                family_infected = True
+                break
+
+    if family_infected:
+        for human in town.people:
+            if human.home_idx == person.home_idx:
+                human.quarantined = True
+
+
+def cure_human_with_probability(person: Human) -> None:
     u = np.random.random()
     if u < person.probability_of_cured:
         person.recovered = True
@@ -144,14 +128,14 @@ def cure_human_with_probability(person: Human):
         person.time_since_cured = 0
 
 
-def check_susceptible(person: Human):
+def check_susceptible(person: Human) -> None:
     if (not person.susceptible) & (not person.infected):
-        if person.time_since_infected > config.time_to_susceptible:
+        if person.time_since_infected > family_config.time_to_susceptible:
             person.susceptible = True
             person.time_since_infected = 0
 
 
-def infect_person_with_probability(person: Human, current_loc: Place):
+def infect_person_with_probability(person: Human, current_loc: Place) -> None:
     if person.susceptible:
         infect_p = get_infection_probability(current_loc)
         u = np.random.random()
@@ -159,41 +143,55 @@ def infect_person_with_probability(person: Human, current_loc: Place):
             _infect_person(person)
 
 
-def get_transistion_probability(person: Human, q:np.ndarray):
-    if isinstance(person.currently_at, Home):
+def get_transition_probability(person: Human, current_location: Place) -> np.ndarray:
+    q = get_prob_matrix()
+    if family_config.lockdown_type.value > 0:
+        q = get_isolated_prob_matrix() if person.quarantined else get_prob_matrix()
+
+    if isinstance(current_location, Home):
         return q[0]
-    elif isinstance(person.currently_at, Workplace):
+    elif isinstance(current_location, Workplace):
         return q[1]
-    elif isinstance(person.currently_at, Supermarket):
+    elif isinstance(current_location, Supermarket):
         return q[2]
 
 
-def get_current_location(person):
-    if isinstance(person.currently_at[0], Home):
-        return person.currently_at[person.home_idx]
-    elif isinstance(person.currently_at[0], Workplace):
-        return person.currently_at[person.work_idx]
-    elif isinstance(person.currently_at[0], Supermarket):
-        return person.currently_at[0]
+def get_current_location(person: Human, town: Town) -> Place:
+    if person.currently_at == Home:
+        return town.homes[person.home_idx]
+    elif person.currently_at == Workplace:
+        return town.workplaces[person.work_idx]
+    elif person.currently_at == Supermarket:
+        return town.supermarkets[0]
 
 
-def move_from_place_to_place(person: Human, place_list_to: List[Place]):
+def move_from_place_to_place(person: Human, currently_at: Place, place_list_to: List[Place]) -> None:
     if isinstance(place_list_to[0], Workplace):
         place_list_to[person.work_idx].people[person.id] = person
+        person.currently_at = Workplace
     elif isinstance(place_list_to[0], Home):
         place_list_to[person.home_idx].people[person.id] = person
+        person.currently_at = Home
     elif isinstance(place_list_to[0], Supermarket):
         place_list_to[0].people[person.id] = person
+        person.currently_at = Supermarket
 
-    del get_current_location(person).people[person.id]
-    person.currently_at = place_list_to
+    del currently_at.people[person.id]
 
 
-def get_summary_stats_from_town(town: Town):
+def get_summary_stats_from_town(town: Town) -> Dict[str, int]:
     no_dead = [person.dead for person in town.people].count(True)
     no_infected = [person.infected for person in town.people].count(True)
     no_recovered = [person.recovered for person in town.people].count(True)
     no_susceptible = [person.susceptible for person in town.people].count(True)
+    average_infection = 0
+    if family_config.model_type == ModelType.SIMULATION:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            average_infection = np.nanmean([
+                person.people_infected / person.times_sick if person.times_sick > 0 else np.nan for person in
+                town.people
+            ])
     total_no = len(town.people)
 
     stats = {
@@ -202,70 +200,127 @@ def get_summary_stats_from_town(town: Town):
         "no_infected": no_infected,
         "no_recovered": no_recovered,
         "no_susceptible": no_susceptible,
+        "average_infection": average_infection
     }
+
     return stats
 
 
-def simulate(n_time_steps, n_families, n_workplaces=2, n_supermarkets=1):
+def check_know_infection(human) -> None:
+    if human.time_since_infected > family_config.incubation_time:
+        human.quarantined = True
+
+
+def move(human: Human, current_loc: Place, town: Town) -> None:
+    trans_p = get_transition_probability(human, current_loc)
+
+    go_to_loc = [town.homes, town.workplaces, town.supermarkets]
+    go_to_idx = np.random.choice([0, 1, 2], p=trans_p)
+    go_to = go_to_loc[go_to_idx]
+
+    if not human.currently_at == type(go_to[0]):
+        move_from_place_to_place(human, current_loc, go_to)
+
+
+def simulate(n_time_steps, n_families, burn_in, n_workplaces=2, n_supermarkets=1) -> pd.DataFrame:
     time = n_time_steps
+
     town = setup_town(n_families, n_workplaces, n_supermarkets)
-    q = get_prob_matrix()
     summary_statistics = {}
 
-    for t in range(time):
-        summary_statistics[t] = get_summary_stats_from_town(town)
+    for t in range(time + burn_in):
+        if t >= burn_in:
+            summary_statistics[t - burn_in] = get_summary_stats_from_town(town)
         for human in town.people:
             if human.dead:
                 continue
-            current_loc = get_current_location(human)
+            current_loc = get_current_location(human, town)
+
+            if t < burn_in:
+                move(human, current_loc, town)
+                continue
+
             human.time_since_infected += 1
             if human.infected:
+                check_know_infection(human)
                 cure_human_with_probability(human)
                 is_dead = kill_human_with_probability(human, current_loc)
+                if family_config.lockdown_type == LockdownType.QUARANTINE:
+                    lockdown_family(human, town)
                 if is_dead:
                     continue
             else:
                 check_susceptible(human)
-                infect_person_with_probability(human, current_loc)
+                if family_config.model_type == ModelType.PROBABILISTIC:
+                    infect_person_with_probability(human, current_loc)
 
-            trans_p = get_transistion_probability(human, q)
+            move(human, current_loc, town)
 
-            go_to_loc = [town.homes, town.workplaces, town.supermarkets]
-            go_to_idx = np.random.choice([0, 1, 2], p=trans_p)
-            go_to = go_to_loc[go_to_idx]
-
-            if not isinstance(human.currently_at[0], type(go_to[0])):
-                move_from_place_to_place(human, go_to)
+        if family_config.model_type == ModelType.SIMULATION:
+            for home in town.homes:
+                simulate_spatial(spatial_config, home.people)
+            for workplace in town.workplaces:
+                simulate_spatial(spatial_config, workplace.people)
+            for supermarket in town.supermarkets:
+                simulate_spatial(spatial_config, supermarket.people)
 
     summary_statistics[n_time_steps] = get_summary_stats_from_town(town)
     return pd.DataFrame(summary_statistics).T
 
 
 if __name__ == "__main__":
-    simulations_kwargs = {
-        "n_time_steps": config.time,
-        "n_families": config.no_families,
-        "n_workplaces": config.no_workplaces,
-        "n_supermarkets": config.no_supermarkets
-    }
+    family_config.variable_death_rate = True
 
-    stat_tensor = np.zeros((config.n_simulations, config.time + 1, 5))
-    for i in tqdm(range(config.n_simulations)):
-        stats = simulate(**simulations_kwargs).values
-        stat_tensor[i] = stats
+    for model, lockdown_type in product(ModelType, LockdownType):
+        family_config.model_type = model
+        family_config.lockdown_type = lockdown_type
+        plot_title = f"Model type: {str(family_config.model_type).split('.')[-1].lower()}, Lockdown type: {str(family_config.lockdown_type).split('.')[-1].lower()}"
+        print(f"Running {family_config.n_simulations} simulations")
+        print(f"with model type {family_config.model_type}")
+        print(f"with lockdown type {family_config.lockdown_type}")
 
-    mean_stats = stat_tensor.mean(axis=0)
-    std_stats = stat_tensor.std(axis=0)
+        simulations_kwargs = {
+            "n_time_steps": family_config.time,
+            "n_families": family_config.no_families,
+            "burn_in": family_config.burn_in_period,
+            "n_workplaces": family_config.no_workplaces,
+            "n_supermarkets": family_config.no_supermarkets,
+        }
 
-    plt.plot(mean_stats[:, 1], linestyle="dashed", label="Dead")
-    plt.fill_between([i for i in range(len(mean_stats[:, 1]))],(mean_stats[:, 1]-1.96*std_stats[:,1]), (mean_stats[:, 1]+1.96*std_stats[:,1]), alpha=.1)
-    plt.plot(mean_stats[:, 2], linestyle="dashed", label="Infected")
-    plt.fill_between([i for i in range(len(mean_stats[:, 2]))],(mean_stats[:, 2]-1.96*std_stats[:,2]), (mean_stats[:, 2]+1.96*std_stats[:,2]), alpha=.1)
-    plt.plot(mean_stats[:, 3], linestyle="dashed", label="Recovered")
-    plt.fill_between([i for i in range(len(mean_stats[:, 3]))],(mean_stats[:, 3]-1.96*std_stats[:,3]), (mean_stats[:, 3]+1.96*std_stats[:,3]), alpha=.1)
-    plt.plot(mean_stats[:, 4], linestyle="dashed", label="Susceptible")
-    plt.fill_between([i for i in range(len(mean_stats[:, 4]))],(mean_stats[:, 4]-1.96*std_stats[:,4]), (mean_stats[:, 4]+1.96*std_stats[:,4]), alpha=.1)
-    plt.xlabel("Time")
-    plt.ylabel("Number of people")
-    plt.legend()
-    plt.show()
+        stat_tensor = np.zeros((family_config.n_simulations, family_config.time + 1, 6))
+        for i in tqdm(range(family_config.n_simulations)):
+            stats = simulate(**simulations_kwargs).values
+            stat_tensor[i] = stats
+
+        mean_stats = np.nanmean(stat_tensor, axis=0)
+        std_stats = np.nanquantile(stat_tensor, q=[0.025, 0.975], axis=0)
+
+        plt.figure(figsize=(10, 5))
+        plt.plot(mean_stats[:, 1], linestyle="dashed")
+        plt.fill_between([i for i in range(len(mean_stats[:, 1]))], std_stats[0, :, 1], std_stats[1, :, 1], alpha=.1)
+        plt.plot(mean_stats[:, 2], linestyle="dashed")
+        plt.fill_between([i for i in range(len(mean_stats[:, 2]))], std_stats[0, :, 2], std_stats[1, :, 2], alpha=.1)
+        plt.plot(mean_stats[:, 3], linestyle="dashed")
+        plt.fill_between([i for i in range(len(mean_stats[:, 3]))], std_stats[0, :, 3], std_stats[1, :, 3], alpha=.1)
+        plt.plot(mean_stats[:, 4], linestyle="dashed")
+        plt.fill_between([i for i in range(len(mean_stats[:, 4]))], std_stats[0, :, 4], std_stats[1, :, 4], alpha=.1)
+        # Create legend for mean lines
+        plt.plot([], [], linestyle="dashed", label="Dead", color="blue")
+        plt.plot([], [], linestyle="dashed", label="Infected", color="orange")
+        plt.plot([], [], linestyle="dashed", label="Recovered", color="green")
+        plt.plot([], [], linestyle="dashed", label="Susceptible", color="red")
+        plt.fill_between([], [], [], alpha=.1, label="CI (2.5-97.5%)")
+        plt.legend(bbox_to_anchor=(1.3, 1),
+                   fancybox=True,
+                   shadow=True)
+        plt.xlabel("Time")
+        plt.ylabel("Number of people")
+        plt.title(plot_title)
+        plt.subplots_adjust(right=0.75)
+        plt.show()
+
+        if family_config.model_type == ModelType.SIMULATION:
+            plt.plot(mean_stats[:, 5], linestyle="dashed", label="Average infection")
+            plt.fill_between([i for i in range(len(mean_stats[:, 5]))], std_stats[0, :, 5], std_stats[1, :, 5],
+                             alpha=.1)
+            plt.show()

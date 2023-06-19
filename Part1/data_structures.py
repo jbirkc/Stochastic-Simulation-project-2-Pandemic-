@@ -4,7 +4,7 @@ from typing import List, Dict, Type
 import numpy as np
 from pydantic import BaseModel, root_validator
 
-from Part1.configs import FamilyModelConfig, SpatialConfig
+from configs import FamilyModelConfig, SpatialConfig
 
 family_config = FamilyModelConfig()
 spatial_config = SpatialConfig()

@@ -1,12 +1,12 @@
 import numpy as np
 import uuid
-from typing import List
+from typing import List, Dict
 import pandas as pd
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-from Part1.configs import FamilyModelConfig, SpatialConfig, ModelType, LockdownType
-from Part1.spatial_model import simulate as simulate_spatial
-from Part1.data_structures import Human, Home, Workplace, Supermarket, Town, Place, family_config, spatial_config
+from configs import FamilyModelConfig, SpatialConfig, ModelType, LockdownType
+from spatial_model import simulate as simulate_spatial
+from data_structures import Human, Home, Workplace, Supermarket, Town, Place, family_config, spatial_config
 
 family_config, spatial_config = FamilyModelConfig(), SpatialConfig()
 family_config.lockdown_type = LockdownType.ISOLATION
@@ -168,7 +168,7 @@ def move_from_place_to_place(person: Human, currently_at: Place, place_list_to: 
     del currently_at.people[person.id]
 
 
-def get_summary_stats_from_town(town: Town) -> dict[str, int]:
+def get_summary_stats_from_town(town: Town) -> Dict[str, int]:
     no_dead = [person.dead for person in town.people].count(True)
     no_infected = [person.infected for person in town.people].count(True)
     no_recovered = [person.recovered for person in town.people].count(True)

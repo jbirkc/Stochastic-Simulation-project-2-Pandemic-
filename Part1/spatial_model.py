@@ -2,8 +2,9 @@ import numpy as np
 import numpy.linalg as l
 import pandas as pd
 import uuid
-from Part1.data_structures import Human
-from Part1.configs import SpatialConfig
+from typing import List, Dict
+from data_structures import Human
+from configs import SpatialConfig
 
 
 def move(person: Human, direction_vector: np.ndarray):
@@ -37,7 +38,7 @@ def setup(n_people):
     return people
 
 
-def get_summary_stats_from_town(town: list[Human]):
+def get_summary_stats_from_town(town: List[Human]):
     no_dead = [person.dead for person in town].count(True)
     no_infected = [person.infected for person in town].count(True)
     no_recovered = [person.recovered for person in town].count(True)
@@ -57,7 +58,7 @@ def get_summary_stats_from_town(town: list[Human]):
     return stats
 
 
-def simulate(config: SpatialConfig, people: dict[str, Human]):
+def simulate(config: SpatialConfig, people: Dict[str, Human]):
     for person in people.values():
         person.location_vector = np.random.uniform(config.x_lim[0], config.x_lim[1], 2)
 
